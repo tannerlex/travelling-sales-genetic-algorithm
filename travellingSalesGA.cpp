@@ -14,17 +14,20 @@ using namespace std;
 #define INFILE "locations.txt"
 #define MCW MPI_COMM_WORLD
 #define CROSSBREED 16
-#define XBREEDSHR 16
+#define XBREEDSHAR 16
 #define MATINGPOOL 256
-#define MUTATIONRT 0.02
+#define MUTATIONRT 0.1
+#define MUTSHIFTMG 5
+#define MUTSWAPMAG 5
 #define POPULATION 1024
 
 bool read_locations(string &filename, vector<pair<int,int>> &data){
-/* file must be in the form:
-XXXXXXXX YYYYY
- XXXXXXX YYYYYY
-etc. where each line consists of 2 whitespace separated integers
-(a comma separation is also acceptable as stoi() will ignore it) */
+  /* file must be in the form:
+   * XXXXXXXX YYYYY
+   *  XXXXXXX YYYYYY
+   * etc. where each line consists of 2 whitespace separated
+   * integers (a comma separation is also acceptable as stoi()
+   * will ignore it)                                               */
 
   string line; /* used to store a single line in the file */
   bool success; /* return flag indicating success of file read */
@@ -51,12 +54,16 @@ etc. where each line consists of 2 whitespace separated integers
 } /* read_locations() */
 
 void print_seq(vector<pair<int,int>> &seq){
+  /* print_seq is a simple function to output each coordinate pair
+   * in a sequence                                                 */
   for(auto & coord : seq){
     cout << "(" << coord.first << ", " << coord.second << ")\n";
   }
 } /* print_seq() */
 
 double total_dist(vector<pair<int,int>> &seq){
+  /* total_dist calculates the distance required to traverse each
+   * coordinate of the sequence in order.                          */
   double length = 0.0; /* running total of sequence distance */
 
   /* for each pair of coordinates */
@@ -71,40 +78,42 @@ double total_dist(vector<pair<int,int>> &seq){
 
 void swap(vector<pair<int,int>> &seq, pair<int,int> &coord, int idx){
   /* Swap the coordinate at the specified index with the specified
-     coordinate wherever it may be within the sequence             */
+   * coordinate wherever it may be within the sequence             */
   auto it = find(seq.begin(), seq.end(), coord);
   if (it != seq.end()){
     std::swap(seq[idx], *it);
   } else {
-    // cout << "\n\n";
+    /* print error message */
     cout << "----------Error in swap()!----------\n";
-    // for(int i = 0; i < seq.size(); ++i){
-    //   cout << seq[i].first << ", " << seq[i].second << "\n";
-    // }
-    // cout << "\ncoord = (" << coord.first << ", " << coord.second << ")\n"; //TODO: cut this out
-    // cout << "vector index = " << idx <<"\n";
-    // cout << "seq[idx] = (" << seq[idx].first << ", " << seq[idx].second << ")\n";
-    // cout << "seq[it] = (" << it->first << ", " << it->second << ")\n";
+    cout << "(" << coord.first << ", " << coord.second << ")\n";
+    cout << "not found in seq, which has size = " << seq.size() << "\n";
   }
 } /* swap() */
 
 bool selection(vector<vector<pair<int,int>>> &seqs, int srvvrs){
+  /* This selection function is used to size down a population of
+   * sequences to the number of specified survivors. It does this
+   * by discarding statistically less fit sequences of the
+   * population. These discards are determined by a stochastic
+   * rejection method.                                             */
   bool converged = false;
   int sz = seqs.size();
   double dist_sum = 0.0;
   vector<double> dist;
   double max_dist = 0.0;
   double min_dist = 100000000000000.0;
-  for(int i=0; i < sz; ++i){
-    dist.push_back(total_dist(seqs[i]));
-    dist_sum += dist[i];
-    if(dist[i]>max_dist){
-      max_dist = dist[i];
+
+  /* measure the maximum and minimum sequence distances */
+  for(int i=0; i < sz; ++i){ /* for each sequence in population */
+    dist.push_back(total_dist(seqs[i])); /* record each distance */
+    dist_sum += dist[i]; /* sum the distances for the population */
+    if(dist[i] > max_dist){ /* if this distance beats the max */
+      max_dist = dist[i]; /* update the max distance */
     }
-    if(dist[i]<min_dist){
-      min_dist = dist[i];
+    if(dist[i] < min_dist){ /* if this distance beats the min */
+      min_dist = dist[i]; /* update the min distance */
     }
-  }
+  } /* end for each sequence in the population */
 
   /* while the candidate list has not reached the desired size */
   while(sz > srvvrs){
@@ -131,7 +140,7 @@ bool selection(vector<vector<pair<int,int>>> &seqs, int srvvrs){
         }
       }
     } /* end else not discarding this sequence */
-  } /* end while size is greater than the number of survivors */
+  } /* end while size is greater than intended survivors */
 
   return converged;
 } /* selection() */
@@ -139,15 +148,22 @@ bool selection(vector<vector<pair<int,int>>> &seqs, int srvvrs){
 vector<pair<int,int>> pmx(vector<pair<int,int>> &seq1,
                           vector<pair<int,int>> seq2){
   /* Partially Matched Crossover (PMX) function returns a child
-     sequence from the two parent sequences.
-     It assumes that the sequences are of the same size            */
-// cout << seq1.size() << " = " << seq2.size() << "\n";
+   * sequence from the two parent sequences.
+   * It assumes that the sequences are of the same size            */
+  if(seq1.size() != seq2.size()){
+    /* print error message */
+    cout << "----------Error in pmx()!----------\n";
+    cout << "sizes of sequences: " << seq1.size();
+    cout << " != " << seq2.size() << "\n";
+    return seq2;
+  }
+
   vector<pair<int,int>>::size_type start, end;/* indexes for gene */
   start = rand()%(seq2.size()-1);/* pick a random index to start */
   end = rand()%(seq2.size()-(start+1))+start+1;/*and a ending index*/
 
   /* perform crossover */
-  for(int i = start; i<=end; ++i){
+  for(int i = start; i <= end; ++i){
     // cout << "pmx()\n";
     swap(seq2, seq1[i], i);
   }
@@ -156,93 +172,93 @@ vector<pair<int,int>> pmx(vector<pair<int,int>> &seq1,
 
 void mutate(vector<pair<int,int>> &seq){
   /* This mutate function will mutate a sequence by 2 methods:
-     1. shifting the sequence forward (with wraparound)
-     2. swapping values in the sequence                            */
+   * 1. shifting the sequence forward (with wraparound)
+   * 2. swapping values in the sequence                            */
 
   /* shift sequence (with wraparaound) */
   pair<int,int> tmp;
-  for(int i = 0; i < (rand()%5+1); ++i){
+  for(int i = 0; i < ((rand() % MUTSHIFTMG) + 1); ++i){
     tmp = seq.front();
     seq.erase(seq.begin());
     seq.push_back(tmp);
   }
 
   /* swap values in sequence */
-  for(int i = 0; i < (rand()%5+1); ++i){
+  for(int i = 0; i < ((rand() % MUTSWAPMAG) + 1); ++i){
     int idx1 = rand()%seq.size();
     int idx2 = rand()%seq.size();
-    // cout << "mutate()\n";
     swap(seq, seq[idx1], idx2);
   }
 } /* mutate() */
 
 void reproduce(vector<vector<pair<int,int>>> &seqs, int numchild){
   /* This reproduce function will add children sequences to the
-     current population of sequences.                              */
+   * current population of sequences.                              */
   int newchildren = 0;
-  while(newchildren < numchild){
-    // cout<<"while(newchildren < numchild)\n";
+  while(newchildren < numchild){ /* while adding children */
     int prnt1 = rand()%seqs.size(); /* randomly pick a parent */
     int prnt2 = rand()%seqs.size(); /* prnt1==prnt2 is acceptable */
-    seqs.push_back(pmx(seqs[prnt1], seqs[prnt2]));
-    newchildren++;
+    seqs.push_back(pmx(seqs[prnt1], seqs[prnt2])); /* add sequence */
+    newchildren++; /* iterate counter */
 
-    /* perform mutation TODO*/
+    /* perform mutation */
     if(MUTATIONRT > ((double)rand() / (double)RAND_MAX)){
       mutate(seqs.back());
     }
-  }
+  } /* while adding children */
 } /* reproduce() */
 
 int xbreed(vector<vector<pair<int,int>>> &seqs, int rank, int np){
   /* This crossbreed function serves to mix up genes between the
-     several processors that are all running on this MPI
-     communicator.                                                 */
-  int sz = seqs.size(); /* total number of sequences */
+   * several processors that are all running on this MPI
+   * communicator.                                                 */
+  int sqssz = seqs.size(); /* total number of sequences */
+  int sz = seqs[0].size(); /* number of coordinates in a sequence */
   int xbred = 0; /* number of crossbreeding events */
-  int shareseqs[XBREEDSHR*2]; /* int array for sharing sequences */
+  int shareseqs[sz*2]; /* int array to share sequences */
 
   /* determine sequences to share with others */
   vector<vector<pair<int,int>>> subseqs = seqs;
-// cout << subseqs.size() << "\n";
-  selection(subseqs, XBREEDSHR);
-// cout << subseqs.size() << "\n";
-  for(int i = 0; i < XBREEDSHR; ++i){/* for each sequence to share */
-    vector<pair<int,int>> seq; /* temporary sequence */
+  selection(subseqs, XBREEDSHAR);
+
+  /* for each sequence to be shared with other processors */
+  for(int i = 0; i < subseqs.size(); ++i){
+    vector<pair<int,int>> seq = subseqs[i]; /* temporary sequence */
 
     /* convert sequence into an array of integers {X1, Y1, X2,...} */
-    for(int j = 0; j < subseqs[j].size(); ++j){/* for each pair */
-      shareseqs[j*2] = subseqs[i][j].first;/* x-coordinate */
-      shareseqs[j*2+1] = subseqs[i][j].second;/* y-coordinate */
+    for(int j = 0; j < seq.size(); ++j){/* for each pair */
+      shareseqs[j*2] = seq[j].first;/* x-coordinate */
+      shareseqs[j*2+1] = seq[j].second;/* y-coordinate */
     }
 
     /* share sequence with next higher rank processor (wraparound) */
-    MPI_Send(shareseqs, XBREEDSHR*2, MPI_INT, (rank+1)%np, 0, MCW);
+    MPI_Send(shareseqs, sz*2, MPI_INT, (rank+1)%np, 0, MCW);
     /* receive sequence from next lower rank processor (wraparound)*/
-    MPI_Recv(shareseqs, XBREEDSHR*2, MPI_INT, (rank+np-1)%np, 0, MCW,
+    MPI_Recv(shareseqs, sz*2, MPI_INT, (rank+np-1)%np, 0, MCW,
         MPI_STATUS_IGNORE);
 
     /* convert received ints into a sequence */
-    for(int j = 0; j < subseqs[j].size(); ++j){
-      seq.push_back(make_pair(shareseqs[j*2], shareseqs[j*2+1]));
-      // cout << shareseqs[j*2] << ", " << shareseqs[j*2+1] << "\n";
+    for(int j = 0; j < seq.size(); ++j){
+      seq[j] = make_pair(shareseqs[j*2], shareseqs[j*2+1]);
     }
+
     seqs.push_back(seq); /* add this sequence to the big list */
     ++xbred; /* increment cross breeding counter */
   } /* end for each sequence to share */
 
   /* get seqs back to normal size */
-  selection(seqs, sz);
+  selection(seqs, sqssz);
 
   return xbred;
 } /* xbreed() */
 
 bool generation(vector<vector<pair<int,int>>> &seqs, int numparnts){
   /* This generation function will create a new generation with
-     surviviors of the previous generation and their surviving 
-     children sequences.
-     numparnts must be even.                                       */
+   * surviviors of the previous generation and their surviving 
+   * children sequences. (numparnts must be even)                  */
   int sz = seqs.size();
+
+  /* print errors and exit if needed */
   if(numparnts%2){
     cout << "Error in generation(): uneven number of parents\n";
     return true;
@@ -273,6 +289,10 @@ int main(int argc, char **argv){
   vector<vector<pair<int, int>>> sequences;
   vector<pair<int,int>> sequence;
   srand(time(0)+rank); /* seed rand with time */
+  double max_fit = 100000000000000.0;
+  int running = 1024;
+  int iters = 1;
+  int xbred = 0;
 
   /* read input file */
   if(!read_locations(infile, sequence)){ 
@@ -291,11 +311,6 @@ int main(int argc, char **argv){
     random_shuffle(sequences[i].begin(), sequences[i].end());
   }
 
-  double max_fit = 100000000000000.0;
-  int running = 128;
-  int iters = 1;
-  int xbred = 0;
-
   while(running){
   
     /* fitness measure */
@@ -309,19 +324,17 @@ int main(int argc, char **argv){
 
     /* iterate a generation */
     bool converged = generation(sequences, MATINGPOOL);
-    // if(converged){
-    //   cout << rank << "'s sequence has converged!\n";
-    // }
+
     /* swap some data around (crossbreed) */
-    if(!(iters%CROSSBREED) || converged){ /* if time to crossbreed */
-cout << sequences.size() << " = ";
+    if(!(iters % CROSSBREED) || converged){ /* if time to crossbreed */
       xbred += xbreed(sequences, rank, np);
-cout << sequences.size() << "\n";
     }
 
     /* check for stopping condition */
     running--;
   } /* end while(running) */
+
+  /* TODO: print best sequence to file */
 
   /* terminate program */
   MPI_Finalize();
