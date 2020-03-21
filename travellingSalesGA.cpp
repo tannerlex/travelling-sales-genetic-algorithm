@@ -1,7 +1,5 @@
 #include <algorithm>
 #include <fstream>
-#include <iostream>
-// #include <map>
 #include <math.h>
 #include <mpi.h>
 #include <sstream>
@@ -10,16 +8,18 @@
 
 using namespace std;
 
-// #define INFILE "locations.txt"
 #define INFILE "locations.txt"
+#define OUTFILE "output.m"
 #define MCW MPI_COMM_WORLD
 #define CROSSBREED 16
 #define XBREEDSHAR 16
 #define MATINGPOOL 256
+#define MAXMNLOOPS 2048
 #define MUTATIONRT 0.1
 #define MUTSHIFTMG 5
 #define MUTSWAPMAG 5
 #define POPULATION 1024
+#define CONVERGNUM 4
 
 bool read_locations(string &filename, vector<pair<int,int>> &data){
   /* file must be in the form:
@@ -53,11 +53,12 @@ bool read_locations(string &filename, vector<pair<int,int>> &data){
   return success;
 } /* read_locations() */
 
-void print_seq(vector<pair<int,int>> &seq){
+void print_seq(vector<pair<int,int>> &seq, ofstream &os){
   /* print_seq is a simple function to output each coordinate pair
    * in a sequence                                                 */
-  for(auto & coord : seq){
-    cout << "(" << coord.first << ", " << coord.second << ")\n";
+  for(int i = 0; i < seq.size(); ++i){/* for each pair in sequence */
+    os << "X(" << i + 1 << ") = " << seq[i].first << ";\n";
+    os << "Y(" << i + 1 << ") = " << seq[i].second << ";\n";
   }
 } /* print_seq() */
 
@@ -194,10 +195,11 @@ void mutate(vector<pair<int,int>> &seq){
 void reproduce(vector<vector<pair<int,int>>> &seqs, int numchild){
   /* This reproduce function will add children sequences to the
    * current population of sequences.                              */
+  int sz = seqs.size();
   int newchildren = 0;
   while(newchildren < numchild){ /* while adding children */
-    int prnt1 = rand()%seqs.size(); /* randomly pick a parent */
-    int prnt2 = rand()%seqs.size(); /* prnt1==prnt2 is acceptable */
+    int prnt1 = rand()%sz; /* randomly pick a parent */
+    int prnt2 = rand()%sz; /* prnt1==prnt2 is acceptable */
     seqs.push_back(pmx(seqs[prnt1], seqs[prnt2])); /* add sequence */
     newchildren++; /* iterate counter */
 
@@ -286,13 +288,16 @@ int main(int argc, char **argv){
 
   /* initialize algorithm variables */
   string infile = INFILE;
+  string outfile = OUTFILE;
+  ofstream ofs(outfile);/* stream for writing to file */
   vector<vector<pair<int, int>>> sequences;
   vector<pair<int,int>> sequence;
   srand(time(0)+rank); /* seed rand with time */
-  double max_fit = 100000000000000.0;
-  int running = 1024;
+  double best_fit = 100000000000000.0;
+  int running = MAXMNLOOPS;
   int iters = 1;
   int xbred = 0;
+  int conv_num = 0;
 
   /* read input file */
   if(!read_locations(infile, sequence)){ 
@@ -316,17 +321,18 @@ int main(int argc, char **argv){
     /* fitness measure */
     for(int i=0; i < sequences.size(); ++i){
       double fit = total_dist(sequences[i]);
-      if(fit < max_fit){max_fit = fit;}
+      if(fit < best_fit){best_fit = fit;}
     }
 
-    /* report current status */
-    cout << "distance(" << iters++ << ") = " << max_fit << ";\n";
+    /* write current status */
+    ofs << "time(" << iters << ") = " << MPI_Wtime() << ";\n";
+    ofs << "distance(" << iters++ << ") = " << best_fit << ";\n";
 
     /* iterate a generation */
     bool converged = generation(sequences, MATINGPOOL);
 
     /* swap some data around (crossbreed) */
-    if(!(iters % CROSSBREED) || converged){ /* if time to crossbreed */
+    if(!(iters % CROSSBREED)){ /* if time to crossbreed */
       xbred += xbreed(sequences, rank, np);
     }
 
@@ -334,7 +340,18 @@ int main(int argc, char **argv){
     running--;
   } /* end while(running) */
 
-  /* TODO: print best sequence to file */
+  /* print best sequence to output file */
+  if(rank == 0){
+    for(int i = 0; i < sequences.size(); ++i){
+      if(total_dist(sequences[i]) == best_fit){
+        print_seq(sequences[i], ofs);
+        i = sequences.size();
+      }
+    }
+  }
+
+  /* close output file */
+  ofs.close();
 
   /* terminate program */
   MPI_Finalize();
